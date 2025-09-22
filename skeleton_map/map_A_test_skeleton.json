@@ -1,0 +1,29 @@
+{
+  "map_to_nimble": {
+    "Hips": "",
+    "Chest": "spine",
+    "Chest2": "",
+    "Chest3": "",
+    "Chest4": "",
+    "Neck": "neck",
+    "Head": "head",
+    "RightCollar": "",
+    "RightShoulder": "shoulder_r",
+    "RightElbow": "elbow_r",
+    "RightWrist": "wrist_r",
+    "LeftCollar": "",
+    "LeftShoulder": "shoulder_l",
+    "LeftElbow": "elbow_l",
+    "LeftWrist": "wrist_l",
+    "RightHip": "hip_r",
+    "RightKnee": "knee_r",
+    "RightAnkle": "ankle_r",
+    "RightToe": "toe_r",
+    "LeftHip": "hip_l",
+    "LeftKnee": "knee_l",
+    "LeftAnkle": "ankle_l",
+    "LeftToe": "toe_l"
+  },
+  "unit_scale": 1.0,
+  "scaleBodies": true
+}
