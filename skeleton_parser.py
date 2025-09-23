@@ -19,147 +19,39 @@ class SkeletonParser:
         self.spec: Optional[SkeletonSpec] = None
 
 
-    def read_skeleton_json(self, path: str, write_template: Optional[str] = None) -> SkeletonSpec:
+    def read_skeleton_json(self, path: str) -> SkeletonSpec:
         with open(path, "r") as f:
             skeleton_json = json.load(f)
 
-        if "joints" not in skeleton_json or "hierarchy" not in skeleton_json:
-            raise ValueError("JSON benötigt Felder 'joints' (List[str]) und 'hierarchy' (List[[child,parent],...]).")
 
         joints = skeleton_json["joints"]
         edges_raw = [tuple(edge) for edge in skeleton_json["hierarchy"]]
 
-        self.spec = self._validate_and_normalize(joints, edges_raw)
-
-        if write_template:
-            tmpl = {
-                "map_to_nimble": self._guess_map_template(self.spec.joints),
-                "unit_scale": 1.0,
-                "scaleBodies": True
-            }
-            with open(write_template, "w") as f:
-                json.dump(tmpl, f, indent=2)
-            print(f"[Info] Mapping-Template geschrieben: {write_template}")
-
-        return self.spec
-    
-
-    def _validate_and_normalize(self, joints: List[str], edges_raw: List[Tuple[int, int]]) -> SkeletonSpec:
-        joints_count = len(joints)
-        
-        # Doppelte Namen checken
-        check_doubles = [n for n in set(joints) if joints.count(n) > 1]
-        if check_doubles:
-            raise ValueError(f"Doppelte Joint-Namen: {check_doubles}")
-
-        # Kanten-Indices & Root-Self-Parents normalisieren
-        edges: List[Tuple[int, int]] = []
+        # Compute parents, children, roots, and topo_order
+        parents = [-1] * len(joints)
+        children = [[] for _ in joints]
         for child, parent in edges_raw:
-            if not (0 <= child < joints_count) or not (0 <= parent < joints_count):
-                raise ValueError(f"Ungültiger Index in hierarchy: {(child, parent)} (0..{joints_count-1} erlaubt)")
-            # Konvention: self-parent (z.B. [0,0]) bedeutet Root
-            if child == parent:
-                edges.append((child, -1))
-            else:
-                edges.append((child, parent))
-
-        # Elternliste: -1 initial
-        parents = [-1] * joints_count
-        for child, parent in edges:
-            if parents[child] != -1 and parent != -1:
-                raise ValueError(f"Joint {child} ('{joints[child]}') hat mehrere Eltern: {parents[child]} und {parent}")
             parents[child] = parent
+            children[parent].append(child)
+        roots = [i for i, p in enumerate(parents) if p == -1]
 
-        # Falls einige Joints in edges nicht vorkommen => bleiben Root (-1)
-        roots = [i for i in range(joints_count) if parents[i] == -1]
-        if not roots:
-            raise ValueError("Kein Root gefunden (mindestens ein Joint muss parent=-1 haben).")
+        # Topological order (simple BFS)
+        topo_order = []
+        queue = deque(roots)
+        while queue:
+            node = queue.popleft()
+            topo_order.append(node)
+            queue.extend(children[node])
 
-        # Kinderliste
-        children: List[List[int]] = [[] for _ in range(joints_count)]
-        for child, parent in edges:
-            if parent != -1:
-                children[parent].append(child)
-
-        # Zyklus-Check + Topologische Order (Kahn)
-        indeg = [0] * joints_count
-        for child, parent in edges:
-            if parent != -1:
-                indeg[child] += 1
-        q = deque([i for i in range(joints_count) if indeg[i] == 0])
-        topo: List[int] = []
-        while q:
-            u = q.popleft()
-            topo.append(u)
-            for v in children[u]:
-                indeg[v] -= 1
-                if indeg[v] == 0:
-                    q.append(v)
-        if len(topo) != joints_count:
-            raise ValueError("Die Hierarchie enthält einen Zyklus oder inkonsistente Kanten.")
-
-        return SkeletonSpec(
+        spec = SkeletonSpec(
             joints=joints,
-            edges=edges,
+            edges=edges_raw,
             parents=parents,
             children=children,
             roots=roots,
-            topo_order=topo,
+            topo_order=topo_order
         )
+        self.spec = spec
+        return spec
 
-
-    def _guess_map_template(self, joints: List[str]) -> Dict[str, str]:
-        """
-        Erzeugt ein sinnvolles Template für map_to_nimble (Rajagopal-ähnliche Namen).
-        Nicht-bindend; du kannst es später überschreiben/feintunen.
-        """
-        base = {
-            # Achse
-            "Hips":   "",        # Root-Center normalerweise nicht direkt fitten
-            "Chest":  "spine",   # wenn im Modell vorhanden, sonst leer lassen
-            "Chest2": "",
-            "Chest3": "",
-            "Chest4": "",
-            "Neck":   "neck",
-            "Head":   "head",
-
-            # Rechts (Arm)
-            "RightCollar":   "",
-            "RightShoulder": "shoulder_r",
-            "RightElbow":    "elbow_r",
-            "RightWrist":    "wrist_r",
-
-            # Links (Arm)
-            "LeftCollar":    "",
-            "LeftShoulder":  "shoulder_l",
-            "LeftElbow":     "elbow_l",
-            "LeftWrist":     "wrist_l",
-
-            # Rechts (Bein)
-            "RightHip":      "hip_r",
-            "RightKnee":     "knee_r",
-            "RightAnkle":    "ankle_r",
-            "RightToe":      "toe_r",
-
-            # Links (Bein)
-            "LeftHip":       "hip_l",
-            "LeftKnee":      "knee_l",
-            "LeftAnkle":     "ankle_l",
-            "LeftToe":       "toe_l",
-        }
-        # Fülle nur für vorhandene Namen; andere bleiben weg
-        return {name: base.get(name, "") for name in joints}
-
-    def print_skeleton_spec(self):
-        if self.spec is None:
-            print("No skeleton spec loaded.")
-            return
-        print("=== Skeleton Specification ===")
-        print(f"Joints count: {len(self.spec.joints)}")
-        print(f"Joints: {self.spec.joints}")
-        print(f"Edges: {self.spec.edges}")
-        print(f"Parents: {self.spec.parents}")
-        print(f"Children: {self.spec.children}")
-        print(f"Roots: {self.spec.roots}")
-        print(f"Topological Order: {self.spec.topo_order}")
 
