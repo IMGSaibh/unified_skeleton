@@ -21,10 +21,12 @@ Benutzung:
 """
 
 from __future__ import annotations
-import argparse
 from pathlib import Path
 from pprint import pprint
+
+import numpy as np
 from skeleton_parser import SkeletonParser
+import nimblephysics as nimble
 
 
 def main():
@@ -36,8 +38,7 @@ def main():
     
 
     skeleton_spec = skeleton_parser.read_skeleton_json(json_path, write_template=template_path)
-    pprint(skeleton_spec)
-
+    skeleton_parser.print_skeleton_spec()
     
     # Ab hier könntest du direkt in Step 2 (NumPy laden & gegen J validieren) gehen,
     # oder das Mapping-Template öffnen und anpassen.
@@ -45,6 +46,19 @@ def main():
     #  - spec.joints (Reihenfolge)
     #  - Mapping: map_to_nimble (aus JSON/Template)
     #  - optional: unit_scale, scaleBodies
+
+    # Create a GUI
+    gui = nimble.NimbleGUI()
+    # Serve the GUI on port 8080
+    gui.serve(8080)
+    api = gui.nativeAPI()
+
+    api.createSphere("ball", radii=np.array([0.2, 0.2, 0.2]), pos=np.array([0., 0.2, 0.]))
+    api.createBox("ground", size=np.array([5., 0.1, 5.]), pos=np.array([0., -0.05, 0.]))
+
+
+    # Block until the GUI is closed
+    gui.blockWhileServing()
 
 
 if __name__ == "__main__":

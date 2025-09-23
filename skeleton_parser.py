@@ -18,6 +18,32 @@ class SkeletonParser:
     def __init__(self):
         self.spec: Optional[SkeletonSpec] = None
 
+
+    def read_skeleton_json(self, path: str, write_template: Optional[str] = None) -> SkeletonSpec:
+        with open(path, "r") as f:
+            skeleton_json = json.load(f)
+
+        if "joints" not in skeleton_json or "hierarchy" not in skeleton_json:
+            raise ValueError("JSON benötigt Felder 'joints' (List[str]) und 'hierarchy' (List[[child,parent],...]).")
+
+        joints = skeleton_json["joints"]
+        edges_raw = [tuple(edge) for edge in skeleton_json["hierarchy"]]
+
+        self.spec = self._validate_and_normalize(joints, edges_raw)
+
+        if write_template:
+            tmpl = {
+                "map_to_nimble": self._guess_map_template(self.spec.joints),
+                "unit_scale": 1.0,
+                "scaleBodies": True
+            }
+            with open(write_template, "w") as f:
+                json.dump(tmpl, f, indent=2)
+            print(f"[Info] Mapping-Template geschrieben: {write_template}")
+
+        return self.spec
+    
+
     def _validate_and_normalize(self, joints: List[str], edges_raw: List[Tuple[int, int]]) -> SkeletonSpec:
         joints_count = len(joints)
         
@@ -124,30 +150,6 @@ class SkeletonParser:
         # Fülle nur für vorhandene Namen; andere bleiben weg
         return {name: base.get(name, "") for name in joints}
 
-    def read_skeleton_json(self, path: str, write_template: Optional[str] = None) -> SkeletonSpec:
-        with open(path, "r") as f:
-            data = json.load(f)
-
-        if "joints" not in data or "hierarchy" not in data:
-            raise ValueError("JSON benötigt Felder 'joints' (List[str]) und 'hierarchy' (List[[child,parent],...]).")
-
-        joints = data["joints"]
-        edges_raw = [tuple(edge) for edge in data["hierarchy"]]
-
-        self.spec = self._validate_and_normalize(joints, edges_raw)
-
-        if write_template:
-            tmpl = {
-                "map_to_nimble": self._guess_map_template(self.spec.joints),
-                "unit_scale": 1.0,
-                "scaleBodies": True
-            }
-            with open(write_template, "w") as f:
-                json.dump(tmpl, f, indent=2)
-            print(f"[Info] Mapping-Template geschrieben: {write_template}")
-
-        return self.spec
-    
     def print_skeleton_spec(self):
         if self.spec is None:
             print("No skeleton spec loaded.")
