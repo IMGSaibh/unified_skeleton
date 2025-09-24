@@ -1,14 +1,10 @@
-from __future__ import annotations
-from pathlib import Path
-from pprint import pprint
-from typing import List
-import numpy as np
+# import os
+# from pathlib import Path
+# from pprint import pprint
+# from typing import List
+# import numpy as np
 from skeleton_parser import SkeletonParser
 import nimblephysics as nimble
-import os
-
-import nimblephysics as nimble
-import torch
 
 def main():
   # workspace_dir = Path.cwd()
@@ -18,37 +14,44 @@ def main():
   # npy_path = f"{workspace_dir}/npy/{file_mname}.npy"
   # poses = np.load(npy_path, allow_pickle=True)
   
-  
-
   # skeleton_spec = skeleton_parser.read_skeleton_json(json_path)
   # src_joint_names = skeleton_spec.joints
 
   # # source_skeleton: nimble.dynamics.Skeleton = nimble.dynamics.Skeleton()
-  # human: nimble.biomechanics.OpenSimFile = nimble.RajagopalHumanBodyModel()
-  # skeleton = human.skeleton
-
   # # target_skeleton: nimble.dynamics.Skeleton = rajagopal_opensim.skeleton
 
-  # skeleton_parser.build_nimble_body_joints(src_joint_names, skeleton, poses)
-  # # converter: nimble.biomechanics.SkeletonConverter = nimble.biomechanics.SkeletonConverter(target_skeleton, source_skeleton)
-  # # converter.linkJoints(target_skeleton.getJoint("radius_hand_l"), source_skeleton.getJoint("wrist_l"))
+  #   # 2) Ziel-Skelett laden (Rajagopal)
+  # human: nimble.biomechanics.OpenSimFile = nimble.RajagopalHumanBodyModel()
+  # target_skeleton: nimble.dynamics.Skeleton = human.skeleton
+  # print(target_skeleton.getNumJoints())
+  # print([target_skeleton.getJoint(i).getName() for i in range(target_skeleton.getNumJoints())])
 
+  
+  # # 3) IK → Ziel-DoFs (Q) im Rajagopal-Zielskelett
+  # Q, mapped_names, mapped_idx = skeleton_parser.build_nimble_body_joints(
+  #     src_joint_names,
+  #     target_skeleton,
+  #     poses,
+  #     unit_scale=1.0,         # falls deine Eingabe mm ist: 0.001
+  #     scale_bodies=False,     # True, wenn Segmentlängen mitgeschätzt werden sollen
+  #     damping=1e-2,
+  #     max_steps=100,
+  #     verbose=True
+  # )
+  # np.save("unified/rajagopal_Q.npy", Q)
 
-  world = nimble.loadWorld("./half_cheetah.skel")
-  initialState = torch.zeros((world.getStateSize()))
-  action = torch.zeros((world.getActionSize()))
-  state = initialState
-  states = []
-  for _ in range(300):
-    state = nimble.timestep(world, state, action)
-    states.append(state)
+  # Load the model
+  rajagopal_opensim: nimble.biomechanics.OpenSimFile = nimble.RajagopalHumanBodyModel()
+  skeleton: nimble.dynamics.Skeleton = rajagopal_opensim.skeleton
 
-  # Display our trajectory in a GUI
-
-  gui = nimble.NimbleGUI(world)
-  gui.serve(8080) # host the GUI on localhost:8080
-  gui.loopStates(states) # tells the GUI to animate our list of states
-  gui.blockWhileServing() # block here so we don't exit the program
+  world = nimble.simulation.World()
+  world.addSkeleton(skeleton)
+  # Create a GUI
+  gui = nimble.NimbleGUI()
+  gui.serve(8090)
+  gui.nativeAPI().renderBasis()
+  gui.nativeAPI().renderWorld(world)
+  gui.blockWhileServing()
 
 
 if __name__ == "__main__":

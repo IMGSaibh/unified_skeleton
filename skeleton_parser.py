@@ -4,41 +4,40 @@ from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from typing import List, Tuple
 import nimblephysics as nimble
-
 import numpy as np
 
 MAP = {
     # Becken / Root
-    "Hips"          : "pelvis",
+    "Hips"          : "ground_pelvis",
     
     # Beine rechts
-    "RightHip"      : "r_hip",
-    "RightKnee"     : "r_knee",
-    "RightAnkle"    : "r_ankle",
-    "RightToe"      : "r_toe",
+    "RightHip"      : "hip_r",
+    "RightKnee"     : "walker_knee_r",
+    "RightAnkle"    : "ankle_r",
+    "RightToe"      : "mtp_r",
     
     # Beine links
-    "LeftHip"       : "l_hip",
-    "LeftKnee"      : "l_knee",
-    "LeftAnkle"     : "l_ankle",
-    "LeftToe"       : "l_toe",
+    "LeftHip"       : "hip_l",
+    "LeftKnee"      : "walker_knee_l",
+    "LeftAnkle"     : "ankle_l",
+    "LeftToe"       : "mtp_l",
     
     # Wirbelsäule
-    "Chest4"        : "spine",
+    "Chest4"        : "back",
     
     # Hals/Kopf
     "Neck"          : "neck",
     "Head"          : "head",
     
     # Schultergürtel rechts
-    "RightShoulder" : "r_shoulder",
-    "RightElbow"    : "r_elbow",
-    "RightWrist"    : "r_wrist",
+    "RightShoulder" : "acromial_r",
+    "RightElbow"    : "elbow_r",
+    "RightWrist"    : "radius_hand_r",
     
     # Schultergürtel links
-    "LeftShoulder"  : "l_shoulder",
-    "LeftElbow"     : "l_elbow",
-    "LeftWrist"     : "l_wrist",
+    "LeftShoulder"  : "acromial_l",
+    "LeftElbow"     : "elbow_l",
+    "LeftWrist"     : "radius_hand_l",
 }
 
 
@@ -93,45 +92,107 @@ class SkeletonParser:
         return spec
 
 
-    def get_joint_handle_by_name(self, skel: nimble.biomechanics.OpenSimFile, name):
-        # Suche im Nimble-Skelett nach einem Joint, dessen Name 'name' enthält
+    def _targets_column_from_world_points(self, points_3d: np.ndarray) -> np.ndarray:
+        """
+        points_3d: (N,3) float -> (3N,1) float64
+        """
+        arr = np.asarray(points_3d, dtype=np.float64)
+        if arr.ndim != 2 or arr.shape[1] != 3:
+            raise ValueError(f"Erwarte (N,3), bekam {arr.shape}")
+        return arr.reshape(-1, 1)
+
+    def get_joint_handle_by_name(self, skel: nimble.dynamics.Skeleton, name: str):
+        # exakte Treffer bevorzugen
+        for i in range(skel.getNumJoints()):
+            j = skel.getJoint(i)
+            if j.getName() == name:
+                return j
+        # fallback: substring
         for i in range(skel.getNumJoints()):
             j = skel.getJoint(i)
             if name in j.getName():
                 return j
-        raise KeyError(f"Nimble-Joint '{name}' nicht gefunden. Passe MAP an (gefunden: {[skel.getJoint(i).getName() for i in range(skel.getNumJoints())]})")
+        raise KeyError(
+            f"Nimble-Joint '{name}' nicht gefunden. "
+            f"Passe MAP an (gefunden: {[skel.getJoint(i).getName() for i in range(skel.getNumJoints())]})"
+    )
 
 
-
-    def build_nimble_body_joints(self, src_joint_names: List[str], skeleton: nimble.dynamics.Skeleton, poses: np.ndarray):
-        # Baue die Liste der Ziel-Joints (Nimble) in derselben Reihenfolge wie unsere Quellpunkte
+    def build_nimble_body_joints(
+        self,
+        src_joint_names: List[str],
+        skeleton: nimble.dynamics.Skeleton,
+        poses: np.ndarray,
+        *,
+        unit_scale: float = 1.0,           
+        axis_map = ("x","y","z"),
+        scale_bodies: bool = False,
+        damping: float = 1e-2,
+        max_steps: int = 100,
+        verbose: bool = False
+    ):
+        """
+        - Baut die Joint-Liste auf dem Ziel-Skelett in gleicher Reihenfolge wie Quellpunkte (über MAP).
+        - Führt pro Frame IK durch und speichert DoFs (Q) als (T, dofs).
+        - Gibt (Q, gemappte_Namen, gemappte_Indices) zurück.
+        """
+        # 1) Joint-Paare (Ziel-Namen) gemäß MAP für vorhandene Source-Namen aufbauen
         bodyJoints = []
         src_indices = []
+        mapped_names = []
         for i, src_name in enumerate(src_joint_names):
             if src_name in MAP:
-                bodyJoints.append(self.get_joint_handle_by_name(skeleton, MAP[src_name]))
-                src_indices.append(i)
+                tgt_name = MAP[src_name]  # MAP: Source -> Target
+                try:
+                    bodyJoints.append(self.get_joint_handle_by_name(skeleton, tgt_name))
+                    src_indices.append(i)
+                    mapped_names.append(tgt_name)
+                except KeyError as e:
+                    if verbose:
+                        print("Warnung:", e)
+                    continue
 
-        bodyJoints = bodyJoints
-        src_indices = np.array(src_indices, dtype=int)
+        if not bodyJoints:
+            raise ValueError("Kein einziges Joint-Paar gemappt. Prüfe MAP und Namen.")
 
-        # -----------------------------
-        # IK-Fit pro Frame
-        # -----------------------------
-        T = poses.shape[0]
-        fitted_states = []  # hier speichern wir z.B. generalized coordinates q pro Frame
+        src_indices = np.asarray(src_indices, dtype=int)
 
-        # Optional: Anfangspose neutral
-        skeleton.setPositions(np.zeros(skeleton.getNumDofs()))
+        # 2) Poses in erwartete Form bringen
+        arr = np.asarray(poses)
+        if arr.ndim == 2 and arr.shape[-1] == 3:
+            arr = arr[None, ...]
+        if not (arr.ndim == 3 and arr.shape[-1] == 3):
+            raise ValueError(f"poses erwartet (T,J,3) oder (J,3); bekam {arr.shape}")
+        T, J, _ = arr.shape
+
+        # 3) Einheiten/Koordinaten anpassen (nur einfache Einheit hier; Achsen optional später)
+        arr = (arr * unit_scale).astype(np.float64, copy=False)
+
+        # 4) IK pro Frame
+        fitted_states = []
+        # skeleton.setPositions(np.zeros(skeleton.getNumDofs()))  # neutrale Startpose
 
         for t in range(T):
-            # Zielpositionen in Weltkoordinaten (Liste von 3D-ndarrays)
-            targetPositions = [poses[t, j].astype(np.float64) for j in src_indices]
-            # IK: passt die Pose des Skeletts an diese Gelenkzentren an
-            skeleton.fitJointsToWorldPositions(bodyJoints, targetPositions)  # optional: scaleBodies=True
+            targets_frame = arr[t, src_indices, :]              # (N,3)
+            targets_vec = self._targets_column_from_world_points(targets_frame)  # (3N,1)
+
+            residual = skeleton.fitJointsToWorldPositions(
+                bodyJoints,
+                targets_vec,
+                # scaleBodies=scale_bodies,
+                # convergenceThreshold=1e-7,
+                # maxStepCount=max_steps,
+                # leastSquaresDamping=damping,
+                # lineSearch=True,
+                # logOutput=verbose
+            )
+            if verbose and (t % 50 == 0):
+                print(f"[{t+1}/{T}] residual={residual:.6f}")
+
             fitted_states.append(skeleton.getPositions().copy())
 
-        fitted_states = np.stack(fitted_states, axis=0)  # (T, dofs)
-        np.save("fitted_nimble_states.npy", fitted_states)
-
-        print("Fertig: gespeicherte Nimble-DoFs pro Frame in 'fitted_nimble_states.npy'")
+        Q = np.stack(fitted_states, axis=0)  # (T, dofs)
+        np.save("fitted_nimble_states.npy", Q)
+        if verbose:
+            print("Fertig: Nimble-DoFs gespeichert -> fitted_nimble_states.npy")
+        return Q, mapped_names, src_indices
