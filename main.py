@@ -40,17 +40,12 @@ def main():
   # )
   # np.save("unified/rajagopal_Q.npy", Q)
 
-  # Load the model
-  rajagopal_opensim: nimble.biomechanics.OpenSimFile = nimble.RajagopalHumanBodyModel()
-  skeleton: nimble.dynamics.Skeleton = rajagopal_opensim.skeleton
-
+  opensim = nimble.RajagopalHumanBodyModel()
   world = nimble.simulation.World()
-  world.addSkeleton(skeleton)
-  # Create a GUI
-  gui = nimble.NimbleGUI()
-  gui.serve(8090)
-  gui.nativeAPI().renderBasis()
-  gui.nativeAPI().renderWorld(world)
+  world.addSkeleton(opensim.skeleton)
+
+  gui = nimble.NimbleGUI(world) 
+  gui.serve(8080)
   gui.blockWhileServing()
 
 
