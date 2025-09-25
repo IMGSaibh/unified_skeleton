@@ -16,12 +16,6 @@ def main():
   poses = np.load(npy_path, allow_pickle=True)
   
   skeleton_parser.read_skeleton_json(json_path)
-  
-
-  # source_skeleton: nimble.dynamics.Skeleton = nimble.dynamics.Skeleton()
-  # target_skeleton: nimble.dynamics.Skeleton = rajagopal_opensim.skeleton
-
-    # 2) Ziel-Skelett laden (Rajagopal)
   human: nimble.biomechanics.OpenSimFile = nimble.RajagopalHumanBodyModel()
   target_skeleton: nimble.dynamics.Skeleton = human.skeleton
   print(target_skeleton.getNumJoints())
@@ -33,7 +27,7 @@ def main():
   Q = skeleton_parser.build_nimble_body_joints(
       target_skeleton,
       poses,
-      unit_scale=1.0,         # falls deine Eingabe mm ist: 0.001
+      unit_scale=1.0,         
       scale_bodies=False,     # True, wenn Segmentlängen mitgeschätzt werden sollen
       damping=1e-2,
       max_steps=100
