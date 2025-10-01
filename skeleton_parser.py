@@ -39,6 +39,11 @@ MAP = {
     "LeftElbow"     : "elbow_l",
     "LeftWrist"     : "radius_hand_l",
 }
+@dataclass
+class Mapping:
+    src_indices: List[int]                 # Indizes in source "joints"
+    tgt_names: List[str]                   # Nimble-Joint-Namen
+    tgt_joints: List[nimble.dynamics.Joint]
 
 @dataclass
 class SkeletonSpec:
@@ -52,6 +57,7 @@ class SkeletonParser:
     def __init__(self):
         self.skeleton_spec: Optional[SkeletonSpec] = None
         self.bodyJoints = []
+        self.src_indices = []  # Indizes der gemappten Joints in der Quell-Skelettliste
         
 
     def read_skeleton_json(self, path: str) -> SkeletonSpec:
@@ -81,6 +87,92 @@ class SkeletonParser:
         self.skeleton_spec = spec
         return spec
     
+
+    def build_mapping(
+        self,
+        target_skeleton: nimble.dynamics.Skeleton,
+        name_map: Dict[str, str] = MAP,
+        strict: bool = False
+    ) -> Mapping:
+        """
+        Liefert ein kompaktes Mapping Quelle->Nimble.
+        - Quelle: self.skeleton_spec.joints (aus skeleton.json)
+        - Ziel:   nimble.dynamics.Skeleton (z.B. Rajagopal)
+        """
+        if self.skeleton_spec is None:
+            raise ValueError("SkeletonSpec ist None. Erst read_skeleton_json() aufrufen.")
+
+        src_indices: List[int] = []
+        tgt_names: List[str] = []
+        tgt_joints: List[nimble.dynamics.Joint] = []
+
+        # Hilfsfunktion: exakte Namen bevorzugen, sonst Substring-Fallback (deine bestehende Logik)
+        def _get_joint_handle(name: str) -> nimble.dynamics.Joint:
+            # exakter Treffer
+            for i in range(target_skeleton.getNumJoints()):
+                j = target_skeleton.getJoint(i)
+                if j.getName() == name:
+                    return j
+            # Substring-Fallback
+            for i in range(target_skeleton.getNumJoints()):
+                j = target_skeleton.getJoint(i)
+                if name in j.getName():
+                    return j
+            raise KeyError(name)
+
+        missing_src: List[str] = []
+        missing_tgt: List[str] = []
+
+        for i, src_name in enumerate(self.skeleton_spec.joints):
+            tgt_name = name_map.get(src_name)
+            if not tgt_name:
+                missing_src.append(src_name)
+                continue
+            try:
+                jh = _get_joint_handle(tgt_name)
+            except KeyError:
+                missing_tgt.append(tgt_name)
+                continue
+
+            src_indices.append(i)
+            tgt_names.append(tgt_name)
+            tgt_joints.append(jh)
+
+        if strict and (missing_src or missing_tgt):
+            raise KeyError(
+                f"Mapping unvollständig. Fehlende Source:{missing_src} Fehlende Target:{missing_tgt}"
+            )
+
+        # für spätere Nutzung optional speichern (ersetzt deine bodyJoints/src_indices)
+        self.bodyJoints = tgt_joints[:]          # Handles in Zielreihenfolge
+        self.src_indices = src_indices[:]        # Source-Indices in derselben Reihenfolge
+
+        return Mapping(src_indices=src_indices, tgt_names=tgt_names, tgt_joints=tgt_joints)  # :contentReference[oaicite:3]{index=3}
+
+
+    def map_points_to_nimble_order(
+        self,
+        frame_points: np.ndarray,
+        mapping: Mapping
+    ) -> np.ndarray:
+        """
+        Nimmt ein (N,3) Frame (Quelle) und extrahiert/ordnet auf (K,3) in Nimble-Reihenfolge um.
+        K = len(mapping.src_indices)
+        """
+        pts = np.asarray(frame_points, dtype=np.float64)
+        if pts.ndim != 2 or pts.shape[1] != 3:
+            raise ValueError(f"Erwarte (N,3), bekam {pts.shape}")
+        return pts[mapping.src_indices, :]       # (K,3)  :contentReference[oaicite:4]{index=4}
+
+    def targets_column_from_points(self, points_3d: np.ndarray) -> np.ndarray:
+        """
+        (K,3) -> (3K,1)  in C-Order (x1,y1,z1,x2,y2,z2,...)
+        """
+        arr = np.asarray(points_3d, dtype=np.float64)
+        if arr.ndim != 2 or arr.shape[1] != 3:
+            raise ValueError(f"Erwarte (K,3), bekam {arr.shape}")
+        return np.ascontiguousarray(arr).reshape(-1, 1, order="C") 
+
     def _targets_column_from_world_points(self, points_3d: np.ndarray) -> np.ndarray:
         """
         points_3d: (N, 3) -> (3N, 1)  float64
@@ -105,14 +197,13 @@ class SkeletonParser:
                 return j
         raise KeyError(
             f"Nimble-Joint '{name}' nicht gefunden. "
-            f"Passe MAP an (gefunden: {[skel.getJoint(i).getName() for i in range(skel.getNumJoints())]})"
+            f"\nPasse MAP an (gefunden: {[skel.getJoint(i).getName() for i in range(skel.getNumJoints())]})"
     )
 
     def create_body_joints_list(self, target_skeleton: nimble.dynamics.Skeleton):
         """       
         - Baut die Joint-Liste auf dem Ziel-Skelett in gleicher Reihenfolge wie Quellpunkte (über MAP).
         """
-        src_indices = []
         mapped_names = []
         if self.skeleton_spec is None:
             print("SkeletonSpec ist None. Lade zuerst ein Skelett.")
@@ -120,58 +211,15 @@ class SkeletonParser:
         for i, src_name in enumerate(self.skeleton_spec.joints):
             if src_name in MAP:
                 tgt_name = MAP[src_name]  # MAP: Source -> Target
-                self.bodyJoints.append(self.get_joint_handle_by_name(target_skeleton, tgt_name))
-                src_indices.append(i)
+                target_skeleton.getJoint(tgt_name)
+                try:
+                    self.bodyJoints.append(self.get_joint_handle_by_name(target_skeleton, tgt_name))
+                except KeyError as e:
+                    print(e)
+                    print("===============================")
+                    continue
+                self.src_indices.append(i)
                 mapped_names.append(tgt_name)
 
         if not self.bodyJoints:
             raise ValueError("Kein einziges Joint-Paar gemappt. Prüfe MAP und Namen.")
-
-
-    def build_nimble_body_joints(
-        self,
-        target_skeleton: nimble.dynamics.Skeleton,
-        poses: np.ndarray,
-        *,
-        unit_scale: float = 1.0,           
-        scale_bodies: bool = False,
-        damping: float = 1e-2,
-        max_steps: int = 100,
-    ):
-        """
-        - Führt pro Frame IK durch und speichert DoFs (Q) als (T, dofs).
-        - Gibt (Q, gemappte_Namen, gemappte_Indices) zurück.
-        """
-
-        if self.skeleton_spec is None:
-            return 
-        src_indices = np.asarray(self.skeleton_spec.joints, dtype=int)
-
-        # 4) IK pro Frame
-        fitted_states = []
-
-        print(target_skeleton.getJoint(1).getName())
-
-        # poses: (T, J, 3)
-        for t, frame in enumerate(poses):
-            # frame: (J, 3)
-            targets_frame = frame[src_indices, :]  # (N, 3) – src_indices: int-Indices der gewünschten Joints
-            targets_vec = self._targets_column_from_world_points(targets_frame)  # (3N, 1) float64
-
-            residual = target_skeleton.fitJointsToWorldPositions(
-                self.bodyJoints,
-                targets_vec,
-                scaleBodies=scale_bodies,
-                convergenceThreshold=1e-7,
-                maxStepCount=max_steps,
-                leastSquaresDamping=damping,
-                lineSearch=True,
-            )
-
-            fitted_states.append(target_skeleton.getPositions().copy())
-
-        Q = np.stack(fitted_states, axis=0)  # (T, dofs)
-        np.save("fitted_nimble_states.npy", Q)
-
-        
-        return Q
