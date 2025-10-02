@@ -1,0 +1,4 @@
+# SkeletonConverter 
+- funktioniert nur, wenn beide Seiten Nimble-Skeleton-Objekte sind und du schon Posen als DOF-Vektoren (q) hast.
+- kein Nimble-Quell-Skeleton mit q. Deshalb ist der direkte IK-Weg (Joints→Weltpositionen) für dich der richtige Start — genau so empfiehlt es die Doku für „Listen von Welt-Joints“ (z. B. Kinect).
+- Converter braucht DOF-Posen (q), nicht Weltpunkte. Du müsstest also erst ein eigenes Nimble-Skeleton aus deiner skeleton.json bauen (Gelenktypen/DOFs definieren), dann pro Frame via IK q_source[t] schätzen, und erst dann convertMotion(q_source) laufen lassen. Das wäre doppelter Aufwand, obwohl du das Ziel ohnehin via IK fitten kannst
