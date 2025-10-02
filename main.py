@@ -36,15 +36,18 @@ def main():
   pprint(mapping.tgt_joints)
   print("================================")
 
-  frame0_points = np.asarray(poses[0], dtype=np.float64)  # (J, 3)
-  print(f"frame0_points shape = {frame0_points.shape}")
-  print(frame0_points)
-  points2nimble_order = skeleton_parser.map_points_to_nimble_order(frame0_points, mapping)
-  print(f" points2nimble_order = {points2nimble_order.shape}")
-  pprint(points2nimble_order)
+  frame_0_points = np.asarray(poses[0], dtype=np.float64)  # (J, 3)
+  # frame0_points *= 0.01         # cm -> m   (falls nötig!)
+  # frame0_points = frame0_points[:, [0,2,1]]  # nur wenn Z-up -> Y-up nötig
+  
+  print(f"frame0_points shape = {frame_0_points.shape}")
+  print(frame_0_points)
+  points_2_nimble_order = skeleton_parser.map_points_to_nimble_order(frame_0_points, mapping)
+  print(f" points_2_nimble_order = {points_2_nimble_order.shape}")
+  pprint(points_2_nimble_order)
   print("================================")
-  targets_col = skeleton_parser.targets_column_from_points(points2nimble_order)
-  print("mapped:", points2nimble_order.shape, "targets:", targets_col.shape)
+  targets_col = skeleton_parser.targets_column_from_points(points_2_nimble_order)
+  print("mapped:", points_2_nimble_order.shape, "targets:", targets_col.shape)
 
   # Mapping done?
   idx = np.array(mapping.src_indices)
@@ -57,13 +60,20 @@ def main():
 
   
   
-  # bodyJoints in derselben Reihenfolge wie points2nimble_order:
-  targetPositions = points2nimble_order.astype(float)               # (K,3) Weltpunkte
+  # Konsistenzchecks
   K = len(mapping.tgt_joints)
-  assert targets_col.shape == (3*K, 1)
-  assert targets_col.dtype == np.float64
+  assert targets_col.shape == (3*K, 1) and targets_col.dtype == np.float64
+  assert np.all(np.isfinite(targets_col)), "NaN/Inf in Targets!"
+
+  # pts_k = points_2_nimble_order 
+  bj = [nimble_skeleton.getJoint("ground_pelvis")]
+  t  = points_2_nimble_order[[mapping.tgt_names.index("ground_pelvis")], :].reshape(-1,1)
+  print(nimble_skeleton.fitJointsToWorldPositions(bj, t, False, 1e-5, 50, 0.05, False, True))
+
 
   ik_error = nimble_skeleton.fitJointsToWorldPositions(mapping.tgt_joints, targets_col, scaleBodies=True)
+  result = nimble_skeleton.getPositions()
+  print(f"result shape = {result.shape}")
   print("IK-Fehler:", ik_error)
 
 
